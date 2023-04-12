@@ -1,0 +1,369 @@
+---
+title: "Lista de Exercícios 8"
+subtitle: ''
+author: "Lucas, Henrique, Iara, Ramon, Vitória"
+date: "2023"
+output:
+  html_document:
+  toc: true
+number_sections: true
+toc_float:
+  collapsed: false
+smooth_scroll: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	error = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+```{r, include=FALSE, warning=FALSE, message=FALSE}
+library(sf)
+library(readxl)
+library(dplyr)
+library(tidyverse)
+library(plotly)
+library(leaflet)
+library(sp)
+library(INLA)
+library(spdep)
+library(kableExtra)
+```
+
+# a) Comente sobre a escolha da base e qual a variável de interesse.
+Para a realização da análise, foi selecionada uma base com dados de roubos de veículos nos bairros de Porto Alegre entre janeiro de 2021 e dezembro de 2022, A variável de interesse é o total de roubo de veículo em cada bairro.
+```{r}
+bairros_poa <- st_read("C:\\Users\\Henrique\\UFRGS\\ESTATISTICA\\ESTATISTICA_ESPACIAL\\LISTA_8\\BAIRROS_POA.shp", quiet = T)
+pop_bairros <- read_excel("C:\\Users\\Henrique\\UFRGS\\ESTATISTICA\\ESTATISTICA_ESPACIAL\\LISTA_8\\bairros_poa.xlsx", sheet = "Sheet1", col_names = TRUE)
+bairros_poa <- left_join(bairros_poa, pop_bairros, by = "BAIRRO")
+bairros_poa <- bairros_poa[ which(bairros_poa$BAIRRO!='Arquipélago'), ]
+pal <- colorBin("Reds", domain = bairros_poa$Point_Coun)
+leaflet(bairros_poa) %>%
+  addProviderTiles(providers$OpenStreetMap.Mapnik) %>%
+  addPolygons(fillColor = ~pal(Point_Coun), 
+              weight = 1.5,
+              opacity = 0.7,
+              fillOpacity = 0.7,
+              color = "gray",
+              highlight = highlightOptions(
+                weight = 5,
+                color = "#666",
+                fillOpacity = 0.7,
+                bringToFront = TRUE),
+              label = sprintf("%s - N. Fatos %s", bairros_poa$BAIRRO, round(bairros_poa$Point_Coun,3)),
+              labelOptions = labelOptions(
+                style = list("font-weight" = "normal", padding = "6px 11px"),
+                textsize = "10px",
+                direction = "auto"))%>%
+  leaflet::addLegend(pal = pal, values = ~bairros_poa$Point_Coun, opacity = 0.7, title = "Total de Fatos por Bairro",
+                     labFormat = labelFormat(digits = 3),
+                     position = "bottomright")
+```
+
+# b) Calcule a proporção da variável de interesse.
+Para realizar a proporção da quantidade de roubo de veículo em cada bairro, foi utilizado um banco do Observa POA com o número de domicílios de cada bairro de Porto Alegre no ano de 2018.
+```{r}
+# calculo da proporcao
+bairros_poa$prop <- bairros_poa$Point_Coun/bairros_poa$domicilios
+pal <- colorBin("Reds", domain = bairros_poa$prop)
+leaflet(bairros_poa) %>%
+  addProviderTiles(providers$OpenStreetMap.Mapnik) %>%
+  addPolygons(fillColor = ~pal(prop), 
+              weight = 1.5,
+              opacity = 0.7,
+              fillOpacity = 0.7,
+              color = "gray",
+              highlight = highlightOptions(
+                weight = 5,
+                color = "#666",
+                fillOpacity = 0.7,
+                bringToFront = TRUE),
+              label = sprintf("%s - Proporção %s", bairros_poa$BAIRRO, round(bairros_poa$prop,3)),
+              labelOptions = labelOptions(
+                style = list("font-weight" = "normal", padding = "6px 11px"),
+                textsize = "10px",
+                direction = "auto")) %>%
+  leaflet::addLegend(pal = pal, values = ~bairros_poa$prop, opacity = 0.7, title = "Proporção Fatos vs Domicílios",
+                     labFormat = labelFormat(digits = 3),
+                     position = "bottomright")
+```
+
+# c) Faça um mapa da taxa calcule a SMR e faça um gráfico de dispersão considerando essas taxas e o tamanho da população
+
+```{r}
+# calculo da taxa global
+taxa_global <- sum(bairros_poa$Point_Coun)/sum(bairros_poa$domicilios)
+bairros_poa$tx_global <- taxa_global
+# valores esperados Ei
+bairros_poa$vl_esperado <- bairros_poa$domicilios*taxa_global
+# smr
+bairros_poa$smr <- bairros_poa$Point_Coun/bairros_poa$vl_esperado
+bairros_poa$domicilios <- as.numeric(bairros_poa$domicilios)
+
+# grafico de dispersao SMR x domicilios
+graf = ggplot(bairros_poa) +
+  geom_point(aes(x=domicilios, y=smr, text=paste('bairro' = BAIRRO,
+                                                 '<br>smr' = smr,
+                                                 '<br>dom' = domicilios)))
+ggplotly(graf)
+```
+Os maiores desvios são observados em pontos com menos domicílios.
+````{r}
+## PLOTANDO MAPA ##
+sf_as_sp <- as_Spatial(st_zm(bairros_poa))
+sf_as_sp$variableplot <- as.numeric(
+  sf_as_sp@data[, "smr"])
+# Paleta de cores
+pal <- colorBin("Reds", domain = sf_as_sp$variableplot, bins = 9)
+# Labels do mapa
+labels <- sprintf("%s: %g", sf_as_sp$BAIRRO, sf_as_sp$variableplot) %>%
+  lapply(htmltools::HTML)
+leaflet(sf_as_sp) %>%
+  addProviderTiles(providers$OpenStreetMap.Mapnik) %>%
+  addPolygons(
+    fillColor = ~ pal(variableplot),
+    color = "gray",
+    fillOpacity = 0.7,
+    weight = 1.5,
+    label = labels
+  ) %>%
+  # Adicionando legenda
+  leaflet::addLegend(
+    pal = pal, values = ~variableplot,
+    opacity = 0.7, title = 'SMR nos bairros de POA'
+  )
+```
+
+# d) Calcule o índice de moran para esses dados.
+```{r}
+#lista de vizinhos contíguos
+nb <- poly2nb(sf_as_sp, queen=TRUE)
+ww <- nb2listw(nb, style = 'B')
+#exemplo
+nb[1]
+```
+
+```{r}
+#pesos
+lw <- nb2listw(nb, style="W", zero.policy=TRUE)
+#exemplo pesos
+lw$weights[1]
+```
+
+```{r}
+#calcula o valor médio do vizinho para cada polígono
+inc.lag <- lag.listw(lw, sf_as_sp$Point_Coun)
+#grafico
+plot(inc.lag ~ sf_as_sp$Point_Coun, pch=16, asp=1)
+M1 <- lm(inc.lag ~ sf_as_sp$Point_Coun)
+abline(M1, col="blue")
+#coeficiente da linha = Indice de Moran
+coef(M1)[2]
+```
+
+```{r}
+#Indice pela função
+I <- moran(sf_as_sp$Point_Coun, lw, length(nb), Szero(lw), NAOK = TRUE)[1]
+I
+```
+
+```{r}
+#Teste de hipoteses
+#solucao analitica
+moran.test(sf_as_sp$Point_Coun,lw,zero.policy=TRUE, adjust.n=FALSE)
+```
+
+```{r}
+#solucao monte carlo
+MC<- moran.mc(sf_as_sp$Point_Coun, lw, nsim=999, alternative="greater",zero.policy=TRUE, adjust.n=FALSE )
+MC
+plot(MC)
+#O índice de Moran foi de 0,4 com p valor significativo (<0,001), 
+#ou seja valores similares apresentam-se moderadamente agrupados no espaço.
+```
+
+```{r}
+valores_local_moran <- localmoran(sf_as_sp$Point_Coun, ww)
+# valor do índice de moran local
+ggplot(data.frame(valores_local_moran))+
+  geom_histogram(aes(x = Ii), bins = 8, fill = rgb(.5,.7,.8,1))+
+  xlab('moran local')+ylab('frequência')+
+  theme_minimal()
+```
+
+```{r}
+# significância
+ggplot(data.frame(valores_local_moran))+
+  geom_histogram(aes(x = valores_local_moran[,5]), bins = 10, fill = rgb(1,.2,.4))+
+  geom_vline(xintercept = 0.05)+
+  xlab('p-valores')+ylab('frequência')+
+  theme_minimal()
+```
+
+```{r}
+data.frame(valores_local_moran) %>%
+  select(5) %>%
+  top_n(-10)
+
+mp <- moran.plot(sf_as_sp$Point_Coun, ww, labels=as.character(sf_as_sp$Point_Coun), pch=19)
+
+```
+
+```{r}
+## PLOTANDO MAPA DO I-MORAN LOCAL
+sf_as_sp$valor_moran = valores_local_moran[,1] #valores do i de moran local
+sf_as_sp$significancia_moran = valores_local_moran[,5] #significancia do i de moran local
+
+pal <- colorNumeric("RdYlBu", domain = sf_as_sp$valor_moran, reverse = TRUE)
+leaflet(sf_as_sp) %>%
+  addProviderTiles(providers$OpenStreetMap.Mapnik) %>%
+  addScaleBar(position = c("bottomleft"), options = scaleBarOptions(imperial= FALSE)) %>%
+  addPolygons(fillColor = ~pal(valor_moran), 
+              weight = 1.5,
+              opacity = 0.7,
+              fillOpacity = 0.7,
+              color = "gray",
+              highlight = highlightOptions(
+                weight = 5,
+                color = "#666",
+                fillOpacity = 0.7,
+                bringToFront = TRUE),
+              label = sprintf("%s - valores moran %s", sf_as_sp$BAIRRO, round(sf_as_sp$valor_moran,3)),
+              labelOptions = labelOptions(
+                style = list("font-weight" = "normal", padding = "6px 11px"),
+                textsize = "10px",
+                direction = "auto")) %>%
+  addLegend(pal = pal, values = ~valor_moran, opacity = 1,  
+            title = "Valores Moran", position = 'bottomright')
+```
+
+# e) Calcule o risco relativo de um modelo sem efeito aleatório espacial
+#considerando só a covariavel.
+```{r}
+mapsf <- st_as_sf(sf_as_sp)
+modelo_sem_efeito_aleatorio = inla(Point_Coun ~ 1 + domicilios,
+                                   data = mapsf,
+                                   family = "poisson",
+                                   E = mapsf$E_i, control.predictor = list(compute = TRUE),
+                                   control.compute = list(dic = TRUE, waic = TRUE))
+
+summary(modelo_sem_efeito_aleatorio)
+```
+
+```{r}
+resumo_efeitos_fixos= modelo_sem_efeito_aleatorio$summary.fixed
+resumo_efeitos_fixos
+```
+
+```{r}
+modelo_sem_efeito_aleatorio_aux = modelo_sem_efeito_aleatorio$marginals.fixed
+
+b0_modelo_sem_efeito_aleatorio = data.frame(valores=modelo_sem_efeito_aleatorio_aux$`(Intercept)`[,1], probabilidades = modelo_sem_efeito_aleatorio_aux$`(Intercept)`[,2])
+
+b0_plot = ggplot(b0_modelo_sem_efeito_aleatorio, aes(x=valores, y=probabilidades))+
+  #geom_histogram() +
+  geom_line() +
+  geom_vline(xintercept = resumo_efeitos_fixos$mode[1] , col = "red")+ 
+  labs(x = "beta 0", y = "Density")
+b0_plot
+```
+
+```{r}
+modelo_sem_efeito_aleatorio$summary.fitted.values
+mapsf$rr_sem_efeito_aleatorio <- modelo_sem_efeito_aleatorio$summary.fitted[, "mean"]
+
+### PLOTANDO MAPA SEM EFEITOS ALEATORIOS
+pal <- colorBin("RdYlBu", domain = mapsf$rr_sem_efeito_aleatorio , reverse = TRUE)
+leaflet(mapsf) %>%
+  addProviderTiles(providers$OpenStreetMap.Mapnik) %>%
+  addPolygons(fillColor = ~pal(rr_sem_efeito_aleatorio), 
+              weight = 1.5,
+              opacity = 0.7,
+              fillOpacity = 0.7,
+              color = "gray",
+              highlight = highlightOptions(
+                weight = 5,
+                color = "#666",
+                fillOpacity = 0.7,
+                bringToFront = TRUE)) %>%
+  leaflet::addLegend(pal = pal, values = ~mapsf$rr_sem_efeito_aleatorio, opacity = 0.7, title = "Risco Relativo",
+                     labFormat = labelFormat(digits = 3),
+                     position = "bottomright")
+```
+
+# f) Calcule o risco relativo utilizando o modelo BYM2, utilize alguma covariável.
+
+```{r}
+regiao <- 1:nrow(mapsf)
+mapsf_sp <- st_zm(mapsf)
+grafo_mapa <- poly2nb(as(mapsf_sp, "Spatial"))
+#grafo_mapa_pensilvania <- nb2mat(grafo_mapa_pensilvania, style = 'B')
+nb2INLA("map.adj", grafo_mapa)
+g <- inla.read.graph(filename = "map.adj")
+formula = Point_Coun ~  domicilios + f( regiao ,
+                                  model = "bym2",
+                                  graph =g ,
+                                  scale.model = TRUE ,
+                                  constr = TRUE ,
+                                  hyper = list(
+                                    phi = list(
+                                      prior = "pc",
+                                      param = c(0.5 , 2/3) ,
+                                      initial = -3) ,
+                                    prec = list(
+                                      prior = "pc.prec",
+                                      param = c(0.2 /0.31 , 0.01) ,
+                                      initial = 5) ))
+
+result = inla(formula , data = mapsf , family = "poisson", E = vl_esperado ,
+              control.predictor = list( compute = TRUE ),verbose = FALSE,
+              control.compute = list(dic=TRUE, mlik=TRUE,cpo=TRUE, config = T, waic = T),
+              control.inla = list(strategy = "laplace", npoints = 21))
+summary(result)
+result$summary.fixed
+```
+
+```{r}
+dados_mod <- mapsf
+dados_mod$moda <- result$summary.fitted.values[,"mode"] 
+dados_mod$LL <- result$summary.fitted.values[, "0.025quant"]
+dados_mod$UL <- result$summary.fitted.values[, "0.975quant"]
+dados_sf <- st_as_sf(dados_mod)
+
+pal <- colorBin("RdYlBu", domain = dados_sf$moda, reverse = TRUE, bins = 13)
+leaflet(dados_sf) %>%
+  addProviderTiles(providers$OpenStreetMap.Mapnik) %>%
+  addPolygons(fillColor = ~pal(moda), 
+              weight = 1.5,
+              opacity = 0.7,
+              fillOpacity = 0.7,
+              color = "gray",
+              highlight = highlightOptions(
+                weight = 5,
+                color = "#666",
+                fillOpacity = 0.7,
+                bringToFront = TRUE),
+              label = sprintf("<strong>%s</strong><br/>RR:%s<br/>Quantis:[%s; %s]<br/>Valor Esperado: %s<br/>Valor Observado: %s",
+                              dados_sf$BAIRRO, round(dados_sf$moda,3), round(dados_sf$LL,3), round(dados_sf$UL,3),round(dados_sf$vl_esperado,3),dados_sf$Point_Coun) %>%
+                lapply(htmltools::HTML),
+              labelOptions = labelOptions(
+                style = list("font-weight" = "normal", padding = "6px 11px"),
+                textsize = "13px",
+                direction = "bottom")) %>%
+  leaflet::addLegend(pal = pal, values = ~dados_sf$moda, opacity = 0.7, title = "Risco Relativo",
+                     labFormat = labelFormat(digits = 3),
+                     position = "bottomright")
+```
+
+# g) Interprete os parâmetros estimados do modelo da letra 
+
+De acordo com a tabela que contém os resultados do modelo os valores da posteriori com relação ao intercepto e os valores da posteriori com relação ao parâmetro domicílio. Observa-se o intercepto e os quantis possuem valores positivos, isso pode indicar que não há uma significancia no modelo bayesiano. Outro ponto importante é que de acordo com os valores do intercepto e dos quantis no parâmetro domicilio é possível concluir que o efeito do domicilio é fraco para o modelo.
+
+# h) Qual a diferença entre as taxas do modelo bayesiano e a SMR
+O modelo BYM2 (Besag, York e Mollie, segunda versão) e a SMR (Standardized Mortality Ratio) são duas abordagens diferentes para entender a relação espacial de um determinado evento. O modelo BYM2 é um modelo bayesiano que considera tanto a informação espacial quanto a informação sobre a covariável (por exemplo, quantidade de domicílios) para estimar as taxas de mortalidade padronizadas. Ele modela a variável resposta em cada área como uma combinação linear das covariáveis e dos efeitos espaciais não observados. Além disso, também inclui uma estrutura de autocorrelação espacial para lidar com a dependência espacial dos dados. Ao permitir que as covariáveis sejam incluídas na análise, pode aumentar a precisão das estimativas das taxas de mortalidade padronizadas. Uma outra questão é que o modelo BYM2 é capaz de lidar com dados ausentes e desigualdades na população em risco, o que é uma vantagem sobre outros modelos que não levam esses fatores em consideração.
+Por outro lado, a SMR (Standardized Mortality Ratio) é uma medida de risco que compara a taxa de mortalidade observada em uma determinada área com a taxa de mortalidade esperada com base em uma população de referência. Ela é calculada dividindo a taxa de mortalidade observada pela taxa de mortalidade esperada e multiplicando por 100. Uma SMR maior que 100 indica que a taxa de mortalidade observada é maior do que a taxa de mortalidade esperada. Ela é uma medida simples e fácil de calcular, mas tem algumas limitações. Uma das principais limitações da SMR é que ela pressupõe que a taxa de mortalidade esperada é constante em todas as áreas e em todos os anos, o que nem sempre é verdade. Além disso, a SMR não considera outras covariáveis que podem influenciar a mortalidade, como a idade e o sexo da população.
+Enquanto a SMR é uma medida descritiva útil para comparar as taxas de mortalidade entre diferentes áreas, ela não leva em conta a informação espacial ou outras covariáveis que podem influenciar a mortalidade. Por outro lado, o modelo BYM2 fornece uma abordagem mais sofisticada e mais robusta estatisticamente para estimar as taxas de mortalidade padronizadas, levando em conta a informação espacial e outras covariáveis.
